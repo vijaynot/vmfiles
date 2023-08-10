@@ -1,1 +1,96 @@
+VAGRANTFILE_API_VERSION = "2"
+$sshsetup = <<-SSHSETTING
+[[ ! -d /root/.ssh/ ]] && mkdir -p /root/.ssh
+[[ ! -d /home/vagrant/.ssh/ ]] && mkdir -p /home/vagrant/.ssh
+myhome=/root
+sudo echo "Host *" > $myhome/.ssh/config
+sudo echo "StrictHostKeyChecking no" >> $myhome/.ssh/config
+curl -sk https://raw.githubusercontent.com/vijaynot/mykeys/main/key-2023.key.pub >> $myhome/.ssh/authorized_keys
 
+myhome=/home/vagrant
+curl -sk https://raw.githubusercontent.com/vijaynot/mykeys/main/key-2023.key.pub >> $myhome/.ssh/authorized_keys
+sudo echo "Host *" > $myhome/.ssh/config
+sudo echo "StrictHostKeyChecking no" >> $myhome/.ssh/config
+
+sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+SSHSETTING
+
+
+$installation = <<-INSTALLATION
+echo "installing epel packages............"
+
+cd /etc/yum.repos.d/
+sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+sudo yum update -y
+
+sudo yum install epel-release -y
+echo "installing packages............"
+sudo yum -y install vim nano p7zip unzip net-tools tcpdump wget nc git curl
+echo "installing docker............"
+curl -fsSL https://get.docker.com/ | sh
+echo "installing restarting docker............"
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker vagrant
+sudo echo '{"insecure-registries": ["172.30.0.0/16"]}' > /etc/docker/daemon.json
+sudo systemctl restart docker
+sudo docker run hello-world
+
+echo "pulling images............"
+sudo docker pull postgres:14
+sudo docker pull bitnami/minio:2022
+sudo docker pull nginx:1.22
+
+echo "installing docker compose............"
+sudo curl -SL https://github.com/docker/compose/releases/download/v2.5.0/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+echo "installing kubectl............"
+
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo mv kubectl /bin/kubectl
+sudo chmod +x /bin/kubectl
+sudo yum install bash-completion
+echo 'source <(kubectl completion bash)' >>~/.bashrc
+
+echo "Graphical installation started............"
+
+
+sudo systemctl set-default graphical.target
+
+sudo dnf groupinstall "Workstation" -y
+echo "installation completed............"
+INSTALLATION
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+	(1..1).each do |i|
+		config.vm.box = "centos/8"
+		config.vm.box_version = "2011.0"
+		config.disksize.size = '20GB'
+		if Vagrant.has_plugin?("vagrant-vbguest") then
+          config.vbguest.auto_update = false
+		end
+		config.vm.define :"mycentos8" do |srvnode|
+			srvnode.vm.network :private_network, ip: "192.168.56.111"
+			#srvnode.vm.network :private_network, ip: "192.168.56.20#{i}"
+			srvnode.vm.network "public_network"
+			srvnode.ssh.insert_key = false
+			srvnode.vm.provider "virtualbox" do |v|
+			    v.name = "centos8_desktop1"
+				v.customize ["modifyvm", :id, "--memory", 4096]
+				v.customize ["modifyvm", :id, "--cpus", 1]
+			end #Provider
+			srvnode.vm.provision "shell", inline: $sshsetup	
+			srvnode.vm.provision "shell", inline: $installation	
+			#srvnode.vm.provision "shell", inline: $script
+	end #define
+  end #each Loop 
+end #configure
+
+#vagrant plugin install vagrant-vbguest vagrant-disksize
+#vagrant plugin list --> vagrant-vbguest,vagrant-disksize 
+#vagrant box list
+#vagrant box remove mycentos7
+#vagrant package --output mycentos7.box
+#vagrant box add mycentos7 mycentos7.box
